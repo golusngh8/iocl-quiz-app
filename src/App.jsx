@@ -1,595 +1,316 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { initializeApp } from 'firebase/app';
-import { getFirestore, doc, getDoc, setDoc, serverTimestamp, collection } from 'firebase/firestore';
-import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from "firebase/auth";
+import React, { useState, useRef, useEffect } from 'react';
+import { 
+  Bot, 
+  User, 
+  Send, 
+  ShieldAlert, 
+  Zap, 
+  Server, 
+  Activity, 
+  Settings, 
+  AlertTriangle,
+  Info
+} from 'lucide-react';
 
-// --- START: FIREBASE CONFIGURATION ---
-// This robustly checks for credentials from the dev environment, then Netlify, then falls back.
-const firebaseConfig = typeof __firebase_config !== 'undefined'
-  ? JSON.parse(__firebase_config)
-  : window.firebaseConfig || {
-      apiKey: "YOUR_API_KEY", // Fallback for local development
-      authDomain: "YOUR_AUTH_DOMAIN",
-      projectId: "YOUR_PROJECT_ID",
-      storageBucket: "YOUR_STORAGE_BUCKET",
-      messagingSenderId: "YOUR_MESSAGING_SENDER_ID",
-      appId: "YOUR_APP_ID"
-    };
+// API Configuration
+const apiKey = "AIzaSyDrMbZ3YnZfzasKzCd41W4CVlJ6bSEj5uI"; // Environment provides the key at runtime
+const MODEL_NAME = "gemini-2.5-flash-preview-09-2025";
+const API_URL = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL_NAME}:generateContent?key=${apiKey}`;
 
-// Initialize Firebase
-const app = initializeApp(firebaseConfig);
-const db = getFirestore(app);
-const auth = getAuth(app);
-// Reads the App ID from the dev environment, then Netlify, then falls back.
-const appId = typeof __app_id !== 'undefined'
-  ? __app_id
-  : window.appId || 'default-shs-quiz';
-// --- END: FIREBASE CONFIGURATION ---
+// The strict persona instructions based on your prompt
+const systemInstruction = `
+Role and Identity
+You are the "IOCL RCP Station Expert," an advanced AI assistant specializing in electrical, mechanical, and instrumentation engineering. Your sole purpose is to provide highly accurate, safe, and practical troubleshooting, maintenance, and operational guidance for Indian Oil Corporation Limited (IOCL) Remote Control Point (RCP) stations. 
 
+Tone and Demeanor
+Professional, analytical, precise, and safety-oriented. Communicate in clear, concise technical language appropriate for site engineers, technicians, and maintenance personnel.
 
-// --- START: FULL QUESTIONS BANK ---
-const quizQuestions = [
-    {
-        "question": "What is the primary theme of the 'Swachhata Hi Sewa (SHS)' 2025 campaign?",
-        "options": ["Garbage Free India", "Clean Water for All", "Digital India", "Green Energy"],
-        "answer": 0,
-        "topic": "Primary theme of SHS 2025"
-    },
-    {
-        "question": "The Swachh Bharat Mission was launched on the birth anniversary of which Indian leader?",
-        "options": ["Sardar Vallabhbhai Patel", "Jawaharlal Nehru", "Mahatma Gandhi", "Subhas Chandra Bose"],
-        "answer": 2,
-        "topic": "Launch of Swachh Bharat Mission"
-    },
-    {
-        "question": "Which of the following is NOT one of the 3 R's of waste management?",
-        "options": ["Reduce", "Reuse", "Recycle", "Recreate"],
-        "answer": 3,
-        "topic": "The 3 R's of waste management"
-    },
-    {
-        "question": "What does ODF stand for in the context of the Swachh Bharat Mission?",
-        "options": ["Open Defecation Free", "Our Duty First", "Open Door Facility", "Official Data Form"],
-        "answer": 0,
-        "topic": "The meaning of ODF"
-    },
-    {
-        "question": "Which color dustbin is typically designated for dry waste like plastic, paper, and metal?",
-        "options": ["Green", "Red", "Yellow", "Blue"],
-        "answer": 3,
-        "topic": "Color coding of dustbins for dry waste"
-    },
-    {
-        "question": "Composting is a method to process which type of waste?",
-        "options": ["E-waste", "Plastic waste", "Wet/Organic waste", "Hazardous waste"],
-        "answer": 2,
-        "topic": "Composting and organic waste"
-    },
-    {
-        "question": "What is the main goal of the 'Swachh Survekshan'?",
-        "options": ["To build toilets in rural areas", "To provide drinking water", "To rank cities on their cleanliness levels", "To fund cleaning equipment"],
-        "answer": 2,
-        "topic": "The purpose of Swachh Survekshan"
-    },
-    {
-        "question": "Which ministry is the nodal agency for Swachh Bharat Mission (Urban)?",
-        "options": ["Ministry of Health and Family Welfare", "Ministry of Housing and Urban Affairs", "Ministry of Rural Development", "Ministry of Environment, Forest and Climate Change"],
-        "answer": 1,
-        "topic": "Nodal ministry for Swachh Bharat Mission (Urban)"
-    },
-    {
-        "question": "The concept of a 'Circular Economy' is closely related to which Swachhata principle?",
-        "options": ["Waste to Wealth", "Daily Sweeping", "Personal Hygiene", "Public Awareness Drives"],
-        "answer": 0,
-        "topic": "Circular Economy and Waste to Wealth"
-    },
-    {
-        "question": "What is 'plogging', a popular activity promoted under Swachh Bharat?",
-        "options": ["Planting trees", "Writing blogs about cleanliness", "Picking up litter while jogging", "Distributing cleaning supplies"],
-        "answer": 2,
-        "topic": "The activity of 'plogging'"
-    },
-    {
-        "question": "Which of these is considered hazardous domestic waste?",
-        "options": ["Vegetable peels", "Expired medicines and batteries", "Newspapers", "Glass bottles"],
-        "answer": 1,
-        "topic": "Identifying hazardous domestic waste"
-    },
-    {
-        "question": "The second phase of Swachh Bharat Mission (SBM-G) focuses on what key aspect?",
-        "options": ["ODF Plus (Solid and Liquid Waste Management)", "Building more toilets", "Cleaning rivers", "Conducting surveys"],
-        "answer": 0,
-        "topic": "Focus of Swachh Bharat Mission Phase 2"
-    },
-    {
-        "question": "What is the most effective first step towards proper waste management at home?",
-        "options": ["Burning the waste", "Throwing everything in one bin", "Segregating waste at source (dry/wet)", "Burying the waste"],
-        "answer": 2,
-        "topic": "Source segregation of waste"
-    },
-    {
-        "question": "'Shramdaan' is a key activity in the SHS campaign. What does it mean?",
-        "options": ["Donating money", "Voluntary contribution of labour for cleanliness", "Attending a workshop", "Taking an online pledge"],
-        "answer": 1,
-        "topic": "The meaning of 'Shramdaan'"
-    },
-    {
-        "question": "Which of the following is a non-biodegradable item?",
-        "options": ["Paper bag", "Cotton cloth", "Plastic bottle", "Fruit peel"],
-        "answer": 2,
-        "topic": "Identifying non-biodegradable items"
-    },
-    {
-        "question": "The logo of Swachh Bharat Abhiyan features the spectacles of which national icon?",
-        "options": ["B. R. Ambedkar", "Mahatma Gandhi", "Sardar Patel", "Jawaharlal Nehru"],
-        "answer": 1,
-        "topic": "The icon in the Swachh Bharat logo"
-    },
-    {
-        "question": "What is greywater?",
-        "options": ["Water from toilets", "Relatively clean waste water from baths, sinks, and washing machines", "Industrial waste water", "Rainwater collected from roofs"],
-        "answer": 1,
-        "topic": "Definition of greywater"
-    },
-    {
-        "question": "The 'twin-pit toilet' technology is promoted in rural India for what reason?",
-        "options": ["It looks modern", "It requires a lot of water", "It is a low-cost and effective method for on-site waste disposal", "It can be moved easily"],
-        "answer": 2,
-        "topic": "Purpose of twin-pit toilet technology"
-    },
-    {
-        "question": "What does the term 'source segregation' refer to?",
-        "options": ["Separating waste at the landfill", "Separating waste into dry and wet categories where it is generated", "Using different trucks for different waste types", "A machine that sorts waste"],
-        "answer": 1,
-        "topic": "Definition of source segregation"
-    },
-    {
-        "question": "Which color dustbin is typically used for wet waste (biodegradable)?",
-        "options": ["Blue", "Green", "Red", "Yellow"],
-        "answer": 1,
-        "topic": "Color coding of dustbins for wet waste"
+Knowledge Domain and Equipment Scope
+Your expertise must strictly revolve around the standard operating procedures, troubleshooting, and integration of the following specific RCP station equipment:
+1. Electrical Panels (MCC, PCC, Control panels)
+2. SCADA RTU (Remote Terminal Units for telemetry and control)
+3. Telecommunication Setup: Tejas Telecom SDH multiplexers and Hirschmann industrial ethernet switches.
+4. Power Backup Systems: Solar battery chargers, DG (Diesel Generator) sets.
+5. Battery Banks: OPzS 800Ah 2V battery bank (24 cells configured for 48V DC systems).
+6. Actuation & Valves: Bifi actuators and MOVs (Motor Operated Valves).
+7. Instrumentation & Transmitters: PT (Pressure Transmitters), TT (Temperature Transmitters).
+8. Fire, Gas & Security Systems: HCD, MSD, Heat detectors, Proximity sensors, and PIDWS controllers.
+9. Hazardous Area Equipment: Flameproof Junction Boxes (JB) and Exhaust fans.
+
+Operating Rules and Constraints
+1. Safety First: Always prioritize industrial safety. For any intervention involving the electrical panel, DG, battery bank, or hazardous areas (flameproof zones), BEGIN your response by reminding the user of necessary safety precautions (e.g., LOTO procedures, proper PPE, gas-free environment).
+2. Clarification: If a user's query is too vague, ask 1-3 targeted troubleshooting questions to narrow down the fault.
+3. Troubleshooting Framework: When asked to solve an equipment failure, structure your response EXACTLY using the following headings:
+   - **Initial Diagnosis**: (Possible causes)
+   - **Step-by-Step Troubleshooting**: (Immediate checks)
+   - **Corrective Action**: (Resolution)
+   - **Preventive Maintenance Tip**: (Tip)
+   *(Prefix with **Safety Note**: if applicable)*
+4. Standard Compliance: Assume all operations must comply with IOCL engineering standards, OISD guidelines, and standard hazardous area classifications (e.g., Ex-d for flameproof JBs).
+`;
+
+// Utility for exponential backoff on API calls
+const fetchWithRetry = async (url, options, retries = 5) => {
+  const delays = [1000, 2000, 4000, 8000, 16000];
+  for (let i = 0; i < retries; i++) {
+    try {
+      const response = await fetch(url, options);
+      if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+      return await response.json();
+    } catch (error) {
+      if (i === retries - 1) throw error;
+      await new Promise(res => setTimeout(res, delays[i]));
     }
-];
-// --- END: FULL QUESTIONS BANK ---
-
-
-// --- START: UI COMPONENTS ---
-
-const Spinner = ({size = 'h-8 w-8'}) => (
-    <div className={`animate-spin rounded-full ${size} border-b-2 border-white`}></div>
-);
-
-
-const LoginPage = ({ onLogin, loading, error }) => {
-    const [employeeId, setEmployeeId] = useState('');
-    const [dob, setDob] = useState('');
-    const [formError, setFormError] = useState('');
-
-    const validateAndLogin = () => {
-        if (!/^\d{8}$/.test(employeeId)) {
-            setFormError('Employee ID must be exactly 8 digits.');
-            return;
-        }
-        if (!/^(0[1-9]|[12][0-9]|3[01])(0[1-9]|1[012])(19|20)\d\d$/.test(dob)) {
-            setFormError('Date of Birth must be in DDMMYYYY format.');
-            return;
-        }
-        setFormError('');
-        onLogin(employeeId, dob);
-    };
-
-    return (
-        <div className="w-full max-w-md p-8 space-y-8 bg-white rounded-2xl shadow-lg">
-            <div className="text-center">
-                <img src="https://www.vhv.rs/dpng/d/427-4271837_indian-oil-logo-png-iocl-transparent-png.png" alt="IOCL Logo" className="h-20 mx-auto mb-4" />
-                <h1 className="text-3xl font-bold text-gray-800">Swachhata Hi Sewa</h1>
-                <p className="mt-2 text-lg text-gray-600">SHS – 2025 Quiz Competition</p>
-                <p className="mt-1 text-md font-semibold text-gray-700">ERPL Baitalpur</p>
-            </div>
-            <div className="space-y-6">
-                <div>
-                    <label htmlFor="employeeId" className="text-sm font-medium text-gray-700">Employee ID</label>
-                    <input id="employeeId" type="text" value={employeeId} onChange={(e) => setEmployeeId(e.target.value)} placeholder="Enter 8-digit ID" maxLength="8" className="w-full px-4 py-3 mt-1 text-gray-800 bg-gray-100 border-2 border-transparent rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition"/>
-                </div>
-                <div>
-                    <label htmlFor="dob" className="text-sm font-medium text-gray-700">Date of Birth</label>
-                    <input id="dob" type="text" value={dob} onChange={(e) => setDob(e.target.value)} placeholder="DDMMYYYY" maxLength="8" className="w-full px-4 py-3 mt-1 text-gray-800 bg-gray-100 border-2 border-transparent rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition"/>
-                </div>
-            </div>
-            {(formError || error) && <p className="text-sm text-center text-red-500">{formError || error}</p>}
-            <button onClick={validateAndLogin} disabled={loading || !employeeId || !dob} className="w-full py-3 font-semibold text-white bg-blue-600 rounded-lg hover:bg-blue-700 disabled:bg-blue-300 disabled:cursor-not-allowed flex items-center justify-center transition-all duration-300 ease-in-out">
-                {loading ? <Spinner /> : 'Start Quiz'}
-            </button>
-        </div>
-    );
+  }
 };
 
-const QuizPage = ({ question, onAnswer, questionNumber, totalQuestions, isLastQuestion, onSubmit }) => {
-    const [selectedOption, setSelectedOption] = useState(null);
-    const [isAnswered, setIsAnswered] = useState(false);
-
-    useEffect(() => {
-        setSelectedOption(null);
-        setIsAnswered(false);
-    }, [question]);
-
-    const handleSelect = (index) => {
-        if (isAnswered) return;
-        setSelectedOption(index);
-        setIsAnswered(true);
-        if (!isLastQuestion) {
-            setTimeout(() => {
-                onAnswer(index);
-            }, 500);
-        }
-    };
-    
-    const handleSubmitClick = () => {
-        if (selectedOption === null) return;
-        onSubmit(selectedOption);
+// Simple Markdown parser for bold and line breaks
+const formatText = (text) => {
+  const parts = text.split(/(\*\*.*?\*\*)/g);
+  return parts.map((part, i) => {
+    if (part.startsWith('**') && part.endsWith('**')) {
+      const content = part.slice(2, -2);
+      // Highlight safety notes in red
+      if (content.toLowerCase().includes('safety note')) {
+        return <strong key={i} className="text-red-600 flex items-center gap-1 mt-2 mb-1"><ShieldAlert size={18} /> {content}</strong>;
+      }
+      return <strong key={i} className="text-blue-900">{content}</strong>;
     }
-
-    return (
-        <div className="w-full max-w-2xl p-8 space-y-6 bg-white rounded-2xl shadow-lg">
-            <div className="text-sm text-gray-500">Question {questionNumber} / {totalQuestions}</div>
-            <h2 className="text-2xl font-semibold text-gray-800">{question.question}</h2>
-            <div className="space-y-4">
-                {question.options.map((option, index) => {
-                    const isSelected = selectedOption === index;
-                    let optionClass = "border-gray-300 hover:bg-gray-100";
-                    if (isAnswered && isSelected) {
-                        optionClass = "bg-blue-200 border-blue-400 ring-2 ring-blue-300";
-                    }
-                    return (
-                        <div key={index} onClick={() => handleSelect(index)} className={`flex items-center p-4 border-2 rounded-lg cursor-pointer transition-all duration-200 ${optionClass}`}>
-                            <span className="flex items-center justify-center w-6 h-6 mr-4 text-sm font-bold text-blue-700 bg-blue-100 rounded-full">{String.fromCharCode(65 + index)}</span>
-                            <span className="text-lg text-gray-700">{option}</span>
-                        </div>
-                    );
-                })}
-            </div>
-            {isLastQuestion && isAnswered && (
-                 <button onClick={handleSubmitClick} className="w-full mt-6 py-3 font-semibold text-white bg-green-600 rounded-lg hover:bg-green-700 transition-all duration-300 ease-in-out">
-                    Submit Quiz
-                </button>
-            )}
-        </div>
-    );
+    return <span key={i}>{part.split('\n').map((line, j) => (
+      <React.Fragment key={j}>
+        {line}
+        {j !== part.split('\n').length - 1 && <br />}
+      </React.Fragment>
+    ))}</span>;
+  });
 };
 
-const ResultPage = ({ user, score, totalQuestions, onGetFeedback, feedback, feedbackLoading, feedbackError, onGeneratePledge, pledge, pledgeLoading, pledgeError }) => {
-    const percentage = (score / totalQuestions) * 100;
-    let message = '';
-    if (percentage >= 90) message = 'Excellent Work!';
-    else if (percentage >= 75) message = 'Great Job!';
-    else if (percentage >= 50) message = 'Good Effort!';
-    else message = 'Keep Learning!';
+export default function App() {
+  const [messages, setMessages] = useState([
+    {
+      role: 'assistant',
+      content: "**Safety First!**\nWelcome to the IOCL RCP Station Expert System. I am ready to assist with troubleshooting, maintenance, and operations for Electrical, Instrumentation, SCADA, Telecom, and Safety Systems at the RCP.\n\nPlease describe the issue or component you are working with. Remember to adhere to OISD guidelines and site-specific safety protocols."
+    }
+  ]);
+  const [input, setInput] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+  const messagesEndRef = useRef(null);
 
-    return (
-        <div className="w-full max-w-md p-8 space-y-6 text-center bg-white rounded-2xl shadow-lg">
-            <h1 className="text-3xl font-bold text-gray-800">Quiz Completed!</h1>
-            <p className="text-lg text-gray-600">Thank you for your participation.</p>
-            <div className="p-6 bg-gray-50 rounded-lg border border-gray-200">
-                <div className="flex justify-center text-yellow-500 mb-4">
-                   <svg xmlns="http://www.w3.org/2000/svg" className="h-16 w-16" viewBox="0 0 20 20" fill="currentColor">
-                      <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z" />
-                   </svg>
-                </div>
-                 <p className="text-xl font-semibold text-gray-800">{message}</p>
-                 <p className="text-md text-gray-600 mt-2">Employee ID: <span className="font-bold">{user.employeeId}</span></p>
-                <p className="mt-4 text-5xl font-extrabold text-blue-600">
-                    {score}<span className="text-3xl text-gray-500">/{totalQuestions}</span>
-                </p>
-                <p className="text-lg font-medium text-gray-700">Your Final Score</p>
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  };
+
+  useEffect(() => {
+    scrollToBottom();
+  }, [messages]);
+
+  const handleSend = async (textOverride) => {
+    const textToSubmit = textOverride || input;
+    if (!textToSubmit.trim() || isLoading) return;
+
+    const userMessage = { role: 'user', content: textToSubmit };
+    setMessages(prev => [...prev, userMessage]);
+    setInput('');
+    setIsLoading(true);
+
+    try {
+      const payload = {
+        contents: [
+          // Pass the conversation history to maintain context
+          ...messages.filter(m => m.role !== 'system').map(m => ({
+            role: m.role === 'assistant' ? 'model' : 'user',
+            parts: [{ text: m.content }]
+          })),
+          { role: 'user', parts: [{ text: textToSubmit }] }
+        ],
+        systemInstruction: {
+          parts: [{ text: systemInstruction }]
+        }
+      };
+
+      const result = await fetchWithRetry(API_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+
+      const responseText = result.candidates?.[0]?.content?.parts?.[0]?.text;
+      
+      if (responseText) {
+        setMessages(prev => [...prev, { role: 'assistant', content: responseText }]);
+      } else {
+        throw new Error("Invalid response structure from API");
+      }
+    } catch (error) {
+      setMessages(prev => [...prev, { 
+        role: 'assistant', 
+        content: "**System Error**: Unable to connect to the expert knowledge base. Please check network connectivity and try again. Ensure safe conditions are maintained while waiting." 
+      }]);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const quickPrompts = [
+    "RTU link down, Hirschmann switch showing red light",
+    "OPzS 48V Battery bank showing low specific gravity in cell 12",
+    "Bifi MOV not closing fully on command from SCADA",
+    "Hydrocarbon Detector (HCD) showing false high alarm"
+  ];
+
+  return (
+    <div className="flex h-screen bg-gray-50 font-sans text-gray-800">
+      
+      {/* Sidebar - Equipment Scope */}
+      <div className="w-80 bg-[#002147] text-white flex flex-col hidden md:flex border-r border-blue-800">
+        <div className="p-6 border-b border-blue-800 bg-[#001833]">
+          <div className="flex items-center gap-3">
+            <div className="bg-[#f37021] p-2 rounded-lg">
+              <Settings size={24} className="text-white" />
             </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                 {!feedback && (
-                    <button onClick={onGetFeedback} disabled={feedbackLoading} className="w-full py-3 font-semibold text-white bg-gradient-to-r from-purple-500 to-indigo-600 rounded-lg hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center transition-all duration-300 ease-in-out">
-                        {feedbackLoading ? <Spinner size="h-6 w-6" /> : "✨ Get Feedback"}
-                    </button>
-                )}
-                 {!pledge && (
-                    <button onClick={onGeneratePledge} disabled={pledgeLoading} className="w-full py-3 font-semibold text-white bg-gradient-to-r from-green-500 to-teal-600 rounded-lg hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center transition-all duration-300 ease-in-out">
-                        {pledgeLoading ? <Spinner size="h-6 w-6" /> : "✨ Generate Pledge"}
-                    </button>
-                )}
+            <div>
+              <h1 className="font-bold text-lg leading-tight">IOCL RCP Expert</h1>
+              <span className="text-xs text-blue-300">Engineering & Diagnostic System</span>
             </div>
-
-            {feedbackError && <p className="mt-4 text-sm text-red-500">{feedbackError}</p>}
-            {pledgeError && <p className="mt-4 text-sm text-red-500">{pledgeError}</p>}
-            
-            {feedback && (
-                <div className="mt-6 p-4 bg-indigo-50 text-left rounded-lg border border-indigo-200">
-                    <h3 className="text-lg font-bold text-indigo-800 mb-2">Personalized Learning Plan</h3>
-                    <p className="text-gray-700 whitespace-pre-wrap">{feedback}</p>
-                </div>
-            )}
-            {pledge && (
-                 <div className="mt-6 p-4 bg-green-50 text-left rounded-lg border border-green-200">
-                    <h3 className="text-lg font-bold text-green-800 mb-2">My Swachhata Pledge</h3>
-                    <p className="text-gray-700 whitespace-pre-wrap font-serif italic">{pledge}</p>
-                </div>
-            )}
+          </div>
         </div>
-    );
-};
-
-const App = () => {
-    const [page, setPage] = useState('login');
-    const [user, setUser] = useState(null);
-    const [loading, setLoading] = useState(true);
-    const [error, setError] = useState('');
-    const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
-    const [answers, setAnswers] = useState([]);
-    const [score, setScore] = useState(0);
-    const [timeLeft, setTimeLeft] = useState(600);
-    
-    // State for Gemini API features
-    const [feedback, setFeedback] = useState('');
-    const [feedbackLoading, setFeedbackLoading] = useState(false);
-    const [feedbackError, setFeedbackError] = useState('');
-    const [pledge, setPledge] = useState('');
-    const [pledgeLoading, setPledgeLoading] = useState(false);
-    const [pledgeError, setPledgeError] = useState('');
-
-
-    const questions = useMemo(() => quizQuestions.slice(0, 20), []);
-    const totalQuestions = questions.length;
-
-    useEffect(() => {
-        const performSignIn = async () => {
-            if (!auth.currentUser) {
-                try {
-                    const token = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
-                    if (token) {
-                        await signInWithCustomToken(auth, token);
-                    } else {
-                        await signInAnonymously(auth);
-                    }
-                } catch (err) {
-                    console.error("Authentication failed:", err);
-                    setError("Could not connect to the server. Please refresh.");
-                    setLoading(false);
-                }
-            }
-        };
-        // Delay sign-in slightly to ensure the injected script has run
-        setTimeout(performSignIn, 100);
-        onAuthStateChanged(auth, (user) => {
-            if(user) setLoading(false);
-        });
-    }, []);
-
-    const submitQuiz = useCallback(async (finalAnswers) => {
-        if (!user) return;
-        let finalScore = 0;
-        finalAnswers.forEach((answer, index) => {
-            if (questions[index] && answer === questions[index].answer) {
-                finalScore++;
-            }
-        });
-        setScore(finalScore);
-        try {
-            const submissionRef = doc(db, `artifacts/${appId}/public/data/quiz_submissions`, user.employeeId);
-            await setDoc(submissionRef, {
-                employeeId: user.employeeId,
-                dob: user.dob,
-                answers: finalAnswers,
-                score: finalScore,
-                submittedAt: serverTimestamp()
-            });
-            setPage('result');
-        } catch (err) {
-            console.error("Error saving submission:", err);
-            setError("Failed to save your results. Please check your connection.");
-            setPage('result');
-        }
-    }, [user, questions, appId]);
-
-    useEffect(() => {
-        if (page !== 'quiz') return;
-        if (timeLeft <= 0) {
-            submitQuiz(answers);
-            return;
-        }
-        const timerId = setInterval(() => {
-            setTimeLeft(prevTime => prevTime - 1);
-        }, 1000);
-        return () => clearInterval(timerId);
-    }, [page, timeLeft, answers, submitQuiz]);
-
-    const handleLogin = useCallback(async (employeeId, dob) => {
-        setLoading(true);
-        setError('');
-        try {
-            const submissionRef = doc(db, `artifacts/${appId}/public/data/quiz_submissions`, employeeId);
-            const docSnap = await getDoc(submissionRef);
-            if (docSnap.exists()) {
-                setError('This Employee ID has already completed the quiz.');
-                setLoading(false);
-                return;
-            }
-            setUser({ employeeId, dob });
-            setPage('quiz');
-        } catch (err) {
-            console.error("Error checking user:", err);
-            setError('An error occurred. Please try again.');
-        } finally {
-            setLoading(false);
-        }
-    }, [appId]);
-
-    const handleAnswerSelect = (answerIndex) => {
-        const newAnswers = [...answers, answerIndex];
-        setAnswers(newAnswers);
-        if (currentQuestionIndex < totalQuestions - 1) {
-            setCurrentQuestionIndex(prevIndex => prevIndex + 1);
-        }
-    };
-    
-    const handleQuizSubmit = (lastAnswerIndex) => {
-        const finalAnswers = [...answers, lastAnswerIndex];
-        setAnswers(finalAnswers);
-        submitQuiz(finalAnswers);
-    };
-    
-    // --- START: GEMINI API FEATURE LOGIC ---
-    const callGeminiAPI = async (systemPrompt, userQuery) => {
-        const apiKey = ""; 
-        const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key=${apiKey}`;
-        const payload = {
-            contents: [{ parts: [{ text: userQuery }] }],
-            systemInstruction: { parts: [{ text: systemPrompt }] },
-        };
         
-        const response = await fetch(apiUrl, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
-        });
+        <div className="flex-1 overflow-y-auto p-4">
+          <h2 className="text-xs font-semibold text-blue-300 uppercase tracking-wider mb-4 mt-2">Monitored Systems</h2>
+          <ul className="space-y-2">
+            {[
+              { icon: Zap, text: "Electrical Panels (MCC/PCC)" },
+              { icon: Activity, text: "SCADA & Telemetry RTU" },
+              { icon: Server, text: "Telecom (Tejas/Hirschmann)" },
+              { icon: Zap, text: "Power (Solar/DG/OPzS)" },
+              { icon: Settings, text: "Actuation (Bifi MOVs)" },
+              { icon: Activity, text: "Instrumentation (PT/TT)" },
+              { icon: ShieldAlert, text: "Fire & Gas / PIDWS" },
+              { icon: AlertTriangle, text: "Hazardous Area (Ex-d)" }
+            ].map((item, i) => (
+              <li key={i} className="flex items-center gap-3 p-2 rounded hover:bg-blue-800 transition-colors text-sm text-gray-300">
+                <item.icon size={16} className="text-[#f37021]" />
+                {item.text}
+              </li>
+            ))}
+          </ul>
 
-        if (!response.ok) {
-            throw new Error(`API call failed with status: ${response.status}`);
-        }
-
-        const result = await response.json();
-        const candidate = result.candidates?.[0];
-
-        if (candidate && candidate.content?.parts?.[0]?.text) {
-            return candidate.content.parts[0].text;
-        } else {
-            throw new Error("Invalid response structure from API.");
-        }
-    };
-
-    const handleGetFeedback = async () => {
-        setFeedbackLoading(true);
-        setFeedbackError('');
-        try {
-            const incorrectQuestions = [];
-            answers.forEach((answer, index) => {
-                if(questions[index] && answer !== questions[index].answer) {
-                    incorrectQuestions.push(questions[index]);
-                }
-            });
-
-            if (incorrectQuestions.length === 0) {
-                setFeedback("Congratulations! You answered all questions correctly. You're a true Swachhata Champion!");
-                return;
-            }
-
-            const topics = incorrectQuestions.map(q => `- ${q.topic}`).join('\n');
-            const systemPrompt = "You are a helpful and encouraging expert on India's Swachh Bharat Mission. Your role is to provide constructive feedback to a quiz participant.";
-            const userQuery = `
-                Based on the following topics from incorrectly answered quiz questions, please provide a brief, clear, and encouraging explanation for each topic to help me learn. 
-                Keep each explanation to 2-3 sentences.
-                Finally, conclude with a single, motivational sentence about the importance of individual contribution to a cleaner India.
-                
-                Incorrect Topics:
-                ${topics}
-            `;
-            const generatedFeedback = await callGeminiAPI(systemPrompt, userQuery);
-            setFeedback(generatedFeedback);
-        } catch (err) {
-            console.error("Gemini API error for feedback:", err);
-            setFeedbackError("Sorry, we couldn't generate feedback at this time.");
-        } finally {
-            setFeedbackLoading(false);
-        }
-    };
-    
-    const handleGeneratePledge = async () => {
-        setPledgeLoading(true);
-        setPledgeError('');
-        try {
-            const percentage = (score / totalQuestions) * 100;
-            const performance_level = percentage >= 75 ? "excellent" : "needs improvement";
-
-            const systemPrompt = "You are a motivational writer for a corporate event. Your task is to generate a short, personal, and inspiring pledge about cleanliness (Swachhata).";
-            const userQuery = `
-                Generate a 3-4 sentence personal pledge for an employee of Indian Oil Corporation Limited (IOCL) at ERPL Baitalpur.
-                The employee's performance in the Swachhata quiz was: ${performance_level}.
-                
-                If performance was 'excellent', frame it as a "Swachhata Champion's Pledge" to continue leading by example.
-                If performance was 'needs improvement', frame it as a "Personal Commitment Pledge" to learn more and make a difference every day.
-
-                The tone should be formal, positive, and empowering. Conclude with a powerful line about building a cleaner nation.
-            `;
-            const generatedPledge = await callGeminiAPI(systemPrompt, userQuery);
-            setPledge(generatedPledge);
-        } catch (err) {
-            console.error("Gemini API error for pledge:", err);
-            setPledgeError("Sorry, we couldn't generate your pledge at this time.");
-        } finally {
-            setPledgeLoading(false);
-        }
-    };
-    // --- END: GEMINI API FEATURE LOGIC ---
-
-
-    const renderTimer = () => {
-        const minutes = Math.floor(timeLeft / 60);
-        const seconds = timeLeft % 60;
-        return (
-            <div className="fixed top-0 left-0 right-0 bg-white shadow-md z-10">
-                <div className="max-w-4xl mx-auto p-2 flex justify-between items-center">
-                    <div className="flex items-center">
-                        <img src="https://www.vhv.rs/dpng/d/427-4271837_indian-oil-logo-png-iocl-transparent-png.png" alt="IOCL Logo" className="h-12 mr-4" />
-                        <div>
-                           <div className="text-lg font-bold text-gray-800">SHS Quiz 2025</div>
-                           <div className="text-sm text-gray-600">ERPL Baitalpur</div>
-                        </div>
-                    </div>
-                    <div className={`text-xl font-bold px-4 py-1 rounded-lg ${timeLeft < 60 ? 'text-red-600 bg-red-100' : 'text-gray-700 bg-gray-200'}`}>
-                        {String(minutes).padStart(2, '0')}:{String(seconds).padStart(2, '0')}
-                    </div>
-                </div>
-            </div>
-        );
-    };
-
-    const renderPage = () => {
-        switch (page) {
-            case 'quiz':
-                const isLastQuestion = currentQuestionIndex === totalQuestions - 1;
-                return <div className="mt-20"><QuizPage
-                    question={questions[currentQuestionIndex]}
-                    onAnswer={handleAnswerSelect}
-                    questionNumber={currentQuestionIndex + 1}
-                    totalQuestions={totalQuestions}
-                    isLastQuestion={isLastQuestion}
-                    onSubmit={handleQuizSubmit}
-                /></div>;
-            case 'result':
-                return <ResultPage 
-                    user={user} 
-                    score={score} 
-                    totalQuestions={totalQuestions}
-                    onGetFeedback={handleGetFeedback}
-                    feedback={feedback}
-                    feedbackLoading={feedbackLoading}
-                    feedbackError={feedbackError}
-                    onGeneratePledge={handleGeneratePledge}
-                    pledge={pledge}
-                    pledgeLoading={pledgeLoading}
-                    pledgeError={pledgeError}
-                />;
-            case 'login':
-            default:
-                return <LoginPage onLogin={handleLogin} loading={loading} error={error} />;
-        }
-    };
-
-    return (
-        <div className="min-h-screen bg-gray-100 font-sans flex items-center justify-center p-4 relative bg-cover bg-center" style={{backgroundImage: "linear-gradient(to right top, #d16ba5, #c777b9, #ba83ca, #aa8fd8, #9a9ae1, #8aa7ec, #79b3f4, #69bff8, #52cffe, #41dfff, #46eefa, #5ffbf1)"}}>
-            {page === 'quiz' && renderTimer()}
-            <main className={`transition-opacity duration-500 ease-in-out ${loading ? 'opacity-0' : 'opacity-100'}`}>
-                {renderPage()}
-            </main>
+          <div className="mt-8">
+             <h2 className="text-xs font-semibold text-blue-300 uppercase tracking-wider mb-4">Quick Diagnostics</h2>
+             <div className="space-y-2">
+                {quickPrompts.map((prompt, i) => (
+                  <button 
+                    key={i}
+                    onClick={() => handleSend(prompt)}
+                    className="w-full text-left p-3 rounded bg-blue-900 hover:bg-blue-800 text-xs text-blue-100 border border-blue-700 transition-colors"
+                  >
+                    "{prompt}"
+                  </button>
+                ))}
+             </div>
+          </div>
         </div>
-    );
-};
+        
+        <div className="p-4 bg-blue-900/50 border-t border-blue-800 text-xs text-blue-400 flex gap-2 items-start">
+          <Info size={16} className="shrink-0 mt-0.5" />
+          <p>Always verify guidance with standard OISD documentation and site manuals before execution.</p>
+        </div>
+      </div>
 
-export default App;
+      {/* Main Chat Area */}
+      <div className="flex-1 flex flex-col h-full bg-white relative">
+        {/* Header (Mobile visible, Desktop hidden or simplified) */}
+        <div className="bg-white shadow-sm border-b px-6 py-4 flex items-center gap-3">
+           <div className="md:hidden bg-[#f37021] p-1.5 rounded text-white">
+              <Settings size={20} />
+           </div>
+           <h2 className="font-semibold text-gray-800 text-lg">RCP Diagnostic Terminal</h2>
+           <span className="ml-auto flex items-center gap-2 text-xs font-medium text-emerald-600 bg-emerald-50 px-2 py-1 rounded-full border border-emerald-200">
+             <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></div>
+             System Online
+           </span>
+        </div>
 
+        {/* Chat Messages */}
+        <div className="flex-1 overflow-y-auto p-4 md:p-6 space-y-6 bg-slate-50">
+          {messages.map((msg, idx) => (
+            <div key={idx} className={`flex gap-4 ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+              
+              {msg.role === 'assistant' && (
+                <div className="w-8 h-8 rounded-full bg-[#002147] flex items-center justify-center shrink-0 mt-1 shadow-sm">
+                  <Bot size={18} className="text-white" />
+                </div>
+              )}
+
+              <div 
+                className={`max-w-[85%] md:max-w-[75%] rounded-xl p-4 shadow-sm text-[15px] leading-relaxed ${
+                  msg.role === 'user' 
+                    ? 'bg-[#e6f0fa] text-[#002147] border border-blue-100' 
+                    : 'bg-white border border-gray-200 text-gray-700'
+                }`}
+              >
+                {msg.role === 'user' ? (
+                  msg.content
+                ) : (
+                  <div className="prose prose-sm prose-blue max-w-none">
+                    {formatText(msg.content)}
+                  </div>
+                )}
+              </div>
+
+              {msg.role === 'user' && (
+                <div className="w-8 h-8 rounded-full bg-gray-300 flex items-center justify-center shrink-0 mt-1 shadow-sm">
+                  <User size={18} className="text-gray-600" />
+                </div>
+              )}
+
+            </div>
+          ))}
+          
+          {isLoading && (
+            <div className="flex gap-4 justify-start">
+              <div className="w-8 h-8 rounded-full bg-[#002147] flex items-center justify-center shrink-0 mt-1 shadow-sm">
+                <Bot size={18} className="text-white" />
+              </div>
+              <div className="bg-white border border-gray-200 rounded-xl p-4 shadow-sm flex gap-2 items-center">
+                <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce"></div>
+                <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }}></div>
+                <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0.4s' }}></div>
+              </div>
+            </div>
+          )}
+          <div ref={messagesEndRef} />
+        </div>
+
+        {/* Input Area */}
+        <div className="p-4 bg-white border-t border-gray-200">
+          <div className="max-w-4xl mx-auto relative flex items-center">
+            <textarea
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  handleSend();
+                }
+              }}
+              placeholder="Describe the equipment status or fault code..."
+              className="w-full bg-slate-50 border border-gray-300 rounded-lg pl-4 pr-12 py-3 focus:outline-none focus:ring-2 focus:ring-[#f37021] focus:border-transparent resize-none h-14"
+              rows={1}
+            />
+            <button
+              onClick={() => handleSend()}
+              disabled={!input.trim() || isLoading}
+              className="absolute right-2 p-2 rounded-md bg-[#f37021] text-white hover:bg-orange-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <Send size={20} />
+            </button>
+          </div>
+          <div className="text-center mt-2">
+            <span className="text-[11px] text-gray-400 font-medium">Ensure compliance with OISD-STD-105 & OISD-STD-110 before proceeding with physical intervention.</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
